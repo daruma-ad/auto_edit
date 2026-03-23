@@ -2,28 +2,28 @@
 node_modules/
 venv/
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 
 # Build outputs
 dist/
-build/
 out/
-*.mp4
+output/
+temp/
+temp_*/
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.pytest_cache/
+# Assets & Models
+*.mp4
+*.m4v
+*.mov
+*.wav
+*.mp3
+*.onnx
+*.json
+
+# Credentials/Secrets
+# subtitles.json is data, we might want to ignore it if it's large, but src/ subtitles.json is small
+remotion-project/src/subtitles.json
+remotion-project/public/
 
 # OS files
 .DS_Store
 Thumbs.db
-
-# Remotion / Media
-.cache/
-*.model
-whisper/
