@@ -1,66 +1,84 @@
-# 使い方ガイド
+# 🎬 動画自動編集スクリプト (auto_edit_pro.py) 使い方ガイド
 
-この環境を使用して、自動で動画に字幕を付ける基本的な流れを説明します。
+このツールは、動画を1本用意してスクリプトを実行するだけで、以下の処理を「完全自動」で行うプロフェッショナル仕様のスクリプトです。
 
-## 1. 動画の文字起こし (Python + Whisper)
-
-まず、動画ファイルから音声を取り出し、文字起こしデータ（JSON）を作成します。
-
-### 手順
-1. 字幕を付けたい動画（例: `test.mp4`）を `C:\Users\darumaya\Documents\video-edit\input\` に置きます。
-2. 以下のPythonコード（例: `transcribe.py`）を実行して、文字起こしJSONを生成します。
-
-```python
-import whisper
-import json
-import os
-
-# 設定
-input_video = r"C:\Users\darumaya\Documents\video-edit\input\test.mp4"
-output_json = "subtitles.json"
-
-# モデルの読み込み (large-v3)
-model = whisper.load_model("large-v3")
-
-# 文字起こし実行 (日本語指定)
-print("文字起こしを開始します...")
-result = model.transcribe(input_video, language="ja")
-
-# 結果をJSONとして保存
-with open(output_json, "w", encoding="utf-8") as f:
-    json.dump(result["segments"], f, ensure_ascii=False, indent=2)
-
-print(f"完了しました！ {output_json} が生成されました。")
-```
-
-実行コマンド例:
-`.\venv\Scripts\python.exe transcribe.py`
+1. **無音部分の自動カット**（ジェットカット）
+2. **高精度文字起こし**（Whisper）
+3. **自然な改行でのテロップ生成**（BudouX）
+4. **動画レンダリング**（Remotion）
+5. **Premiere Pro 用データの書き出し**（XML, SRT）
 
 ---
 
-## 2. 動画のプレビュー・レンダリング (Remotion)
+## 🛠️ 事前準備 (1回だけ)
 
-次に、生成した `subtitles.json` を Remotion に読み込ませて動画を表示します。
+このスクリプトは以下の環境で動作します（すでに構築・設定済みです）。
+*   Python 3.x
+*   FFmpeg (Windows: winget 経由でインストール済み)
+*   Node.js & npm (Remotion のレンダリングに使用)
 
-### 手順
-1. `remotion-project/src/subtitles.json` に先ほどのファイルをコピーします。
-2. Remotion Studioを起動して確認します。
+### 動作環境（仮想環境）の有効化
+コマンドプロンプトまたは PowerShell を開き、作業フォルダに移動して Python の仮想環境を有効にします。
 
-```bash
-cd remotion-project
-npm run dev
-```
-
-ブラウザが開き、タイムライン上で字幕が表示されるのを確認できます。
-
-### MP4として出力する場合
-```bash
-npx remotion render MyComp out.mp4
+```powershell
+cd C:\Users\darumaya\antigravity\20260323auto_edit
+.\venv\Scripts\Activate.ps1
+# (「venv」という文字が左側に表示されればOKです)
 ```
 
 ---
 
-## 3. 高度な使い方
+## 🏃 スクッリプトの実行方法
 
-- **Budoux**: 字幕が長すぎる場合、`budoux` を使って読みやすい位置で改行を入れるロジックを `transcribe.py` に追加できます。
-- **デザイン変更**: `remotion-project/src/Composition.tsx` を編集することで、字幕のフォント、色、アニメーションを自由に変更できます。
+### Step 1: 編集したい動画を準備する
+現在、スクリプトは以下のファイルパスを「入力動画」として読み込むよう設定されています。
+編集したい動画をこの名前で配置するか、スクリプト内の `INPUT_VIDEO` のパスを書き換えてください。
+
+*   **入力パス:** `C:\Users\darumaya\Documents\video-edit\input\test.mov`
+
+### Step 2: スクリプトを実行する
+準備ができたら、以下のコマンドを入力して `Enter` を押します。
+
+```powershell
+python auto_edit_pro.py
+```
+
+### Step 3: 自動処理を待つ
+処理が開始されると、画面に `--- Step 1: Audio Extraction ---` など進行状況が表示されます。
+AIによる文字起こしやレンダリングを含むため、**動画の長さによっては数分〜数十分**かかります。
+最後に `--- Done ---` と表示されれば完了です。
+
+---
+
+## 📁 成果物の確認と使い方
+
+処理が完了すると、`output` フォルダの中に **3つのファイル** が生成されます。
+これらは用途に合わせて使い分けてください。
+
+### 1. 🎞️ `final.mp4` (完成動画)
+テロップが焼き付けられた状態の最終的な動画です。
+そのままSNS等にアップロードしたり、確認用として使用できます。
+
+### 2. 📝 `premiere_sequence.xml` (Premiere Pro 用タイムライン)
+AIが行った「ジェットカット」の状態を、Adobe Premiere Pro にそのまま引き継ぐためのファイルです。
+
+*   **使い方**: Premiere Pro を開き、`ファイル` > `読み込み` からこの XML を選択します。
+*   元の動画がタイムライン上で自動的に細かくカットされた状態になります。カットのタイミング（間）を微調整したい場合に最適です。
+
+### 3. 💬 `subtitles.srt` (字幕データファイル)
+AIが生成したテロップの文字と時間情報が入ったファイルです。
+
+*   **使い方**: Premiere Pro のタイムライン上に直接ドラッグ＆ドロップします。
+*   「キャプショントラック」として読み込まれるため、Premiere 上でフォント、色、位置、テロップ内容の一括修正が簡単に行えます。
+
+---
+
+## ⚠️ もしエラーが出力されたら…
+
+*   **「ファイルが見つかりません」のエラー**: `INPUT_VIDEO` のパスに動画が存在するか確認してください。
+*   **ONNXエラー**: 初回起動時は `silero_vad.onnx` モデルがダウンロードされます。ネットワーク接続を確認してください。
+*   **Remotionエラー (MainVideo.tsx not found 等)**: `temp_auto_edit/remotion-project/src/` の中に必要なファイルが存在するか確認してください。
+
+---
+
+> ※このガイドは `C:\Users\darumaya\antigravity\20260323auto_edit\usage_guide.md` に保存されています。
