@@ -13,15 +13,31 @@ import shutil
 from xml.sax.saxutils import escape
 
 # 設定
-FFMPEG_PATH = r"C:\Users\darumaya\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffmpeg.exe"
-FFPROBE_PATH = r"C:\Users\darumaya\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffprobe.exe"
-INPUT_VIDEO = r"C:\Users\darumaya\Documents\video-edit\input\test.mov"
+FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
+FFPROBE_PATH = shutil.which("ffprobe") or "ffprobe"
 TEMP_DIR = "temp"
 OUTPUT_DIR = "output"
-REMOTION_DIR = r"C:\Users\darumaya\antigravity\20260323auto_edit\temp_auto_edit\remotion-project"
+REMOTION_DIR = os.path.join(os.getcwd(), "remotion-project")
 VAD_MODEL_PATH = "silero_vad.onnx"
+AUTO_RENDER = False  # Trueにすると自動でMP4までレンダリングを出力します
+AUTO_FONT_SIZE = False   # 文字数に応じてフォントサイズを自動調整するか
+REMOVE_PUNCTUATION = True # 「、」「。」をテロップから除去するか
+SKIP_CUT = True          # Trueならカットをスキップ（テロップのみ）
 
-os.environ["PATH"] = os.path.dirname(FFMPEG_PATH) + os.pathsep + os.environ["PATH"]
+# テロップ設定
+MAX_CHARS_PER_LINE = 18      # 1行の最大文字数
+MAX_CHARS_PER_SUBTITLE = 30  # 1つのテロップの合計最大文字数
+FONT_SIZE_BASE = 72          # 基本のフォントサイズ
+# AUTO_FONT_SIZE = False       # Trueなら文字数に合わせてサイズ調整、Falseなら一律固定
+
+# 動画ファイルを自動検出
+video_files = []
+if os.path.exists("input"):
+    video_files = [os.path.join("input", f) for f in os.listdir("input") if f.lower().endswith(('.mp4', '.mov', '.m4v'))]
+INPUT_VIDEO = video_files[0] if video_files else os.path.join("input", "test.mp4")
+
+if os.path.isabs(FFMPEG_PATH):
+    os.environ["PATH"] = os.path.dirname(FFMPEG_PATH) + os.pathsep + os.environ["PATH"]
 
 def execute_command_list(args):
     executable = args[0]
@@ -30,8 +46,14 @@ def execute_command_list(args):
     tmp_args = list(args)
     tmp_args[0] = executable
     print(f"Executing: {' '.join(tmp_args)}")
-    result = subprocess.run(tmp_args, capture_output=True, text=True, encoding='utf-8')
-    return result.returncode == 0, result.stderr, result.stdout
+    if "ffprobe" in tmp_args[0]:
+        result = subprocess.run(tmp_args, capture_output=True, text=True, encoding='utf-8')
+        return result.returncode == 0, result.stderr, result.stdout
+    else:
+        result = subprocess.run(tmp_args, stdout=subprocess.DEVNULL, stderr=None)
+        if result.returncode != 0:
+            raise Exception(f"Command failed with exit code {result.returncode}: {' '.join(tmp_args)}")
+        return result.returncode == 0, "", ""
 
 def format_srt_time(seconds):
     td = float(seconds)
@@ -99,7 +121,18 @@ def generate_xml(speech_ts, input_path, output_path, w, h):
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(xml)
 
-def split_text_pro(text, max_total=30, line_limit=18):
+def split_text_pro(text):
+    """
+    Budouxと文字数制限（MAX_CHARS_PER_LINE, MAX_CHARS_PER_SUBTITLE）を考慮して
+    テキストを適切なテロップ単位（linesとfontSizeのリスト）に分割する。
+    """
+    if REMOVE_PUNCTUATION:
+        text = text.replace("、", "").replace("。", "")
+    
+    # グローバル設定を使用
+    max_total = MAX_CHARS_PER_SUBTITLE
+    line_limit = MAX_CHARS_PER_LINE
+    
     parser = budoux.load_default_japanese_parser()
     temp_parts = [text] if len(text) <= max_total else []
     if len(text) > max_total:
@@ -130,11 +163,21 @@ def split_text_pro(text, max_total=30, line_limit=18):
                 for c in chunks:
                     if len(first + c) < mid + (len(c)/2): first += c
                     else: break
-                if not first: first = sub_p[:len(sub_p)//2]
+                if not first: first = sub_p[:len(first or len(sub_p)//2)]
                 second = sub_p[len(first):]
                 lines = [first, second]
-            max_l = max(len(l) for l in lines)
-            results.append({"lines": lines, "fontSize": 72 if max_l <= 8 else 64 if max_l <= 12 else 56 if max_l <= 18 else 48 if max_l <= 24 else 42})
+            
+            # フォントサイズ
+            if AUTO_FONT_SIZE:
+                # 文字数に合わせて縮小（Baseを基準に調整）
+                max_l = max(len(l) for l in lines)
+                size_ratio = 1.0 if max_l <= 8 else 0.85 if max_l <= 12 else 0.75 if max_l <= 18 else 0.6 if max_l <= 24 else 0.5
+                font_size = int(FONT_SIZE_BASE * size_ratio)
+            else:
+                # 一律固定
+                font_size = FONT_SIZE_BASE
+            
+            results.append({"lines": lines, "fontSize": font_size})
     return results
 
 def get_speech_timestamps_onnx(wav_path):
@@ -159,42 +202,131 @@ def get_speech_timestamps_onnx(wav_path):
     return speech_segments
 
 def main():
+    # デフォルト設定で実行
+    process_video()
+
+def process_video(
+    input_video=None,
+    skip_cut=SKIP_CUT,
+    max_chars_per_line=MAX_CHARS_PER_LINE,
+    max_chars_per_subtitle=MAX_CHARS_PER_SUBTITLE,
+    font_size_base=FONT_SIZE_BASE,
+    auto_font_size=AUTO_FONT_SIZE,
+    subtitle_bottom=40,
+    remove_punctuation=REMOVE_PUNCTUATION
+):
+    # グローバル設定を一時的に上書きするための仕組み（関数内ローカル変数として扱う）
+    global MAX_CHARS_PER_LINE, MAX_CHARS_PER_SUBTITLE, FONT_SIZE_BASE, AUTO_FONT_SIZE, INPUT_VIDEO, REMOVE_PUNCTUATION
+    
+    # 引数があれば上書き
+    local_max_line = max_chars_per_line
+    local_max_sub = max_chars_per_subtitle
+    local_font_base = font_size_base
+    local_auto_size = auto_font_size
+    
+    # 既存のロジックがグローバル変数を参照しているためのパッチ
+    # 本来は引数を順次渡すべきだが、最小限の修正に留める
+    orig_max_line = MAX_CHARS_PER_LINE
+    orig_max_sub = MAX_CHARS_PER_SUBTITLE
+    orig_font_base = FONT_SIZE_BASE
+    orig_remove_punc = REMOVE_PUNCTUATION
+
+    MAX_CHARS_PER_LINE = local_max_line
+    MAX_CHARS_PER_SUBTITLE = local_max_sub
+    FONT_SIZE_BASE = local_font_base
+    AUTO_FONT_SIZE = local_auto_size
+    REMOVE_PUNCTUATION = remove_punctuation
+    orig_auto_size = AUTO_FONT_SIZE
+    
+    MAX_CHARS_PER_LINE = local_max_line
+    MAX_CHARS_PER_SUBTITLE = local_max_sub
+    FONT_SIZE_BASE = local_font_base
+    AUTO_FONT_SIZE = local_auto_size
+
+    target_video = input_video if input_video else INPUT_VIDEO
+
     os.makedirs(TEMP_DIR, exist_ok=True)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     print("--- Step 1: Audio Extraction ---")
-    execute_command_list(["ffmpeg", "-y", "-i", INPUT_VIDEO, "-ar", "16000", "-ac", "1", "temp/audio_16k.wav"])
+    execute_command_list(["ffmpeg", "-y", "-i", target_video, "-ar", "16000", "-ac", "1", "temp/audio_16k.wav"])
 
-    print("--- Step 2: Silence Cut (Chunked) ---")
-    speech_ts = get_speech_timestamps_onnx("temp/audio_16k.wav")
-    if not speech_ts: return
-    chunk_size = 10
-    chunk_files = []
-    for i in range(0, len(speech_ts), chunk_size):
-        chunk = speech_ts[i:i+chunk_size]
-        select_parts = [f"between(t,{ts['start']/16000},{ts['end']/16000})" for ts in chunk]
-        out_chunk = f"temp/chunk_{i//chunk_size}.mp4"
-        execute_command_list(["ffmpeg", "-y", "-i", INPUT_VIDEO, "-vf", f"select='{'+'.join(select_parts)}',setpts=N/FRAME_RATE/TB", "-af", f"aselect='{'+'.join(select_parts)}',asetpts=N/SR/TB", out_chunk])
-        chunk_files.append(out_chunk)
-    
-    with open("temp/concat_list.txt", "w") as f:
-        for cf in chunk_files: f.write(f"file '{os.path.abspath(cf)}'\n")
-    execute_command_list(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", os.path.abspath("temp/concat_list.txt"), "-c", "copy", "temp/cut_video.mp4"])
+    print("--- Step 2: Whisper Transcription (small) ---")
+    model = whisper.load_model("small")
+    whisper_result = model.transcribe("temp/audio_16k.wav", language="ja", word_timestamps=True)
+    segments = whisper_result["segments"]
+    if not segments:
+        print("ERROR: No speech segments found.")
+        return
 
-    print("--- Step 3: Audio Resync ---")
+    print(f"    Found {len(segments)} speech segments.")
+
+    if skip_cut:
+        print("--- Step 3: Skip Cut (Copy Original) ---")
+        shutil.copy(target_video, "temp/cut_video.mp4")
+    else:
+        print("--- Step 3: Cut Video (trim+concat) ---")
+        n = len(segments)
+        filter_parts = []
+        for i, seg in enumerate(segments):
+            filter_parts.append(f"[0:v]trim=start={seg['start']}:end={seg['end']},setpts=PTS-STARTPTS[v{i}]")
+            filter_parts.append(f"[0:a]atrim=start={seg['start']}:end={seg['end']},asetpts=PTS-STARTPTS[a{i}]")
+        concat_inputs = "".join(f"[v{i}][a{i}]" for i in range(n))
+        filter_parts.append(f"{concat_inputs}concat=n={n}:v=1:a=1[outv][outa]")
+        filter_complex = ";".join(filter_parts)
+        
+        filter_file = os.path.abspath("temp/filter_complex.txt")
+        with open(filter_file, "w") as f:
+            f.write(filter_complex)
+        
+        cmd = [FFMPEG_PATH, "-y", "-i", target_video, "-filter_complex_script", filter_file, "-map", "[outv]", "-map", "[outa]", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-preset", "fast", "temp/cut_video.mp4"]
+        r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=None)
+        if r.returncode != 0:
+            raise Exception(f"FFmpeg cut failed: {r.returncode}")
+
+    print("--- Step 4: Audio Resync ---")
     execute_command_list(["ffmpeg", "-y", "-i", "temp/cut_video.mp4", "-ar", "44100", "-ac", "1", "temp/voice_audio.wav"])
 
-    print("--- Step 4-5: Whisper & Subtitles ---")
-    model = whisper.load_model("large-v3")
-    result = model.transcribe("temp/voice_audio.wav", language="ja", word_timestamps=True)
-    final_subs = []
-    for seg in result["segments"]:
-        sub_items = split_text_pro(seg["text"].strip())
-        dur, total_chars, curr_start = seg["end"] - seg["start"], sum(len("".join(s["lines"])) for s in sub_items), seg["start"]
-        for s in sub_items:
-            s_dur = (len("".join(s["lines"])) / total_chars) * dur if total_chars > 0 else dur
-            final_subs.append({"start": curr_start, "end": curr_start + s_dur, "lines": s["lines"], "fontSize": s["fontSize"]})
-            curr_start += s_dur
+    print("--- Step 5: Generate Subtitles ---")
+    if skip_cut:
+        final_subs = []
+        for seg in segments:
+            sub_items = split_text_pro(seg["text"].strip())
+            orig_dur = seg["end"] - seg["start"]
+            total_chars = sum(len("".join(s["lines"])) for s in sub_items)
+            curr = seg["start"]
+            for s in sub_items:
+                s_dur = (len("".join(s["lines"])) / total_chars) * orig_dur if total_chars > 0 else orig_dur
+                final_subs.append({"start": curr, "end": curr + s_dur, "lines": s["lines"], "fontSize": s["fontSize"], "bottom": subtitle_bottom})
+                curr += s_dur
+    else:
+        cut_offset = 0.0
+        seg_map = []
+        for seg in segments:
+            seg_map.append((seg["start"], seg["end"], cut_offset))
+            cut_offset += seg["end"] - seg["start"]
+
+        def remap_time(orig_t):
+            for orig_s, orig_e, cut_s in seg_map:
+                if orig_s <= orig_t <= orig_e:
+                    return cut_s + (orig_t - orig_s)
+            best = 0.0
+            for orig_s, orig_e, cut_s in seg_map:
+                if orig_t < orig_s: return cut_s
+                best = cut_s + (orig_e - orig_s)
+            return best
+
+        final_subs = []
+        for seg in segments:
+            sub_items = split_text_pro(seg["text"].strip())
+            orig_dur = seg["end"] - seg["start"]
+            total_chars = sum(len("".join(s["lines"])) for s in sub_items)
+            cut_start = remap_time(seg["start"])
+            curr = cut_start
+            for s in sub_items:
+                s_dur = (len("".join(s["lines"])) / total_chars) * orig_dur if total_chars > 0 else orig_dur
+                final_subs.append({"start": curr, "end": curr + s_dur, "lines": s["lines"], "fontSize": s["fontSize"], "bottom": subtitle_bottom})
+                curr += s_dur
 
     with open("temp/subtitles.json", "w", encoding="utf-8") as f: json.dump(final_subs, f, ensure_ascii=False, indent=2)
 
@@ -203,23 +335,29 @@ def main():
     _, _, probe_out = execute_command_list(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "json", "temp/cut_video_final.mp4"])
     w, h = json.loads(probe_out)["streams"][0]["width"], json.loads(probe_out)["streams"][0]["height"]
 
-    print("--- Step 11: Premiere Pro Export ---")
+    print("--- Step 7: Premiere Pro Export ---")
+    whisper_ts = [{"start": int(seg["start"] * 16000), "end": int(seg["end"] * 16000)} for seg in segments]
     generate_srt(final_subs, "output/subtitles.srt")
-    generate_xml(speech_ts, INPUT_VIDEO, "output/premiere_sequence.xml", w, h)
+    generate_xml(whisper_ts, target_video, "output/premiere_sequence.xml", w, h)
 
     print("--- Step 7-10: Remotion & Render ---")
-    for f in ["cut_video_final.mp4", "voice_audio.wav", "subtitles.json"]:
-        shutil.copy(f"temp/{f}", os.path.join(REMOTION_DIR, "public", f.replace("_final", "")))
+    os.makedirs(os.path.join(REMOTION_DIR, "public"), exist_ok=True)
+    shutil.copy("temp/cut_video_final.mp4", os.path.join(REMOTION_DIR, "public", "cut_video.mp4"))
+    shutil.copy("temp/voice_audio.wav", os.path.join(REMOTION_DIR, "public", "voice_audio.wav"))
+    shutil.copy("temp/subtitles.json", os.path.join(REMOTION_DIR, "public", "subtitles.json"))
     
     total_frames = int(final_subs[-1]["end"] * 30) + 30
     root_tsx = f'import "./index.css";\nimport {{ Composition }} from "remotion";\nimport {{ MainVideo }} from "./MainVideo";\n\nexport const RemotionRoot: React.FC = () => {{\n  return (<Composition id="MainVideo" component={{MainVideo}} durationInFrames={{{total_frames}}} fps={{30}} width={{{w}}} height={{{h}}} />);\n}};\n'
     with open(os.path.join(REMOTION_DIR, "src", "Root.tsx"), "w", encoding="utf-8") as f: f.write(root_tsx)
 
-    os.chdir(REMOTION_DIR)
-    subprocess.run("npx.cmd remotion render MainVideo ../../output/final.mp4 --timeout=120000", shell=True)
-    print("\n--- Done ---")
-    print(f"Final XML (Premiere sequence): output/premiere_sequence.xml")
-    print(f"Final SRT (Premiere subtitles): output/subtitles.srt")
+    # 設定を元に戻す
+    MAX_CHARS_PER_LINE = orig_max_line
+    MAX_CHARS_PER_SUBTITLE = orig_max_sub
+    FONT_SIZE_BASE = orig_font_base
+    AUTO_FONT_SIZE = orig_auto_size
+
+    print("\n--- 処理完了 ---")
+    return True
 
 if __name__ == "__main__":
     main()

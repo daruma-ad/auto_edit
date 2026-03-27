@@ -6,6 +6,7 @@ venv/
 # Build outputs
 dist/
 out/
+input/
 output/
 temp/
 temp_*/

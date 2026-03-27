@@ -4,7 +4,10 @@ import { Subtitle } from "./Subtitle";
 
 const subtitles = require("../public/subtitles.json");
 
-export const MainVideo: React.FC = () => {
+export const MainVideo: React.FC<{ fontSizeOffset: number; bottomOffset: number }> = ({ 
+  fontSizeOffset, 
+  bottomOffset 
+}) => {
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
       <Audio src={staticFile("voice_audio.wav")} volume={1} />
@@ -18,7 +21,12 @@ export const MainVideo: React.FC = () => {
         const dur = Math.max(1, Math.round((sub.end - sub.start) * 30));
         return (
           <Sequence key={idx} from={from} durationInFrames={dur}>
-            <Subtitle lines={sub.lines} fontSize={sub.fontSize} />
+            <Subtitle 
+              index={idx}
+              lines={sub.lines} 
+              fontSize={(sub.fontSize || 72) + fontSizeOffset} 
+              bottom={(sub.bottom || 40) + bottomOffset} 
+            />
           </Sequence>
         );
       })}

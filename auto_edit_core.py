@@ -5,13 +5,17 @@ import subprocess
 import re
 import whisper
 import budoux
+import shutil
 
-FFMPEG_PATH = r"C:\Users\darumaya\AppData\Local\Microsoft\WinGet\Packages\Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe\ffmpeg-8.1-full_build\bin\ffmpeg.exe"
+# Mac等ではシステムにインストールされたffmpegを使用します。
+# 存在しない場合はデフォルトの "ffmpeg" を使用します。
+FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
 
-# Whisperが内部でffmpegを呼べるようにPATHを追加
-FFMPEG_DIR = os.path.dirname(FFMPEG_PATH)
-if FFMPEG_DIR not in os.environ["PATH"]:
-    os.environ["PATH"] = FFMPEG_DIR + os.pathsep + os.environ["PATH"]
+# Whisperが内部でffmpegを呼べるようにPATHを追加（絶対パスの場合のみ）
+if os.path.isabs(FFMPEG_PATH):
+    FFMPEG_DIR = os.path.dirname(FFMPEG_PATH)
+    if FFMPEG_DIR not in os.environ["PATH"]:
+        os.environ["PATH"] = FFMPEG_DIR + os.pathsep + os.environ["PATH"]
 
 def execute_command_list(args):
     if args[0] == "ffmpeg":
@@ -92,9 +96,9 @@ def process_video(input_path, output_dir):
     ]
     execute_command_list(filter_cmd_args)
 
-    print("--- 文字起こし中 (Whisper large-v3) ---")
+    print("--- 文字起こし中 (Whisper small) ---")
     # Whisper内部でffmpegを呼ぶため、PATH設定が重要
-    whisper_model = whisper.load_model("large-v3")
+    whisper_model = whisper.load_model("small")
     result = whisper_model.transcribe(cut_video, language="ja", verbose=False)
 
     print("--- 字幕を整形中 (17文字制限) ---")
@@ -119,6 +123,15 @@ def process_video(input_path, output_dir):
     print(f"字幕データ: {subtitles_json}")
 
 if __name__ == "__main__":
-    input_file = r"C:\Users\darumaya\Documents\video-edit\input\test.mov"
-    output_folder = r"C:\Users\darumaya\Documents\video-edit\output"
-    process_video(input_file, output_folder)
+    # 動画ファイルを自動検出
+    video_files = []
+    if os.path.exists("input"):
+        video_files = [os.path.join("input", f) for f in os.listdir("input") if f.lower().endswith(('.mp4', '.mov', '.m4v'))]
+    input_file = video_files[0] if video_files else os.path.join("input", "test.mp4")
+    output_folder = "output"
+    
+    print(f"対象の動画: {input_file}")
+    if os.path.exists(input_file):
+        process_video(input_file, output_folder)
+    else:
+        print(f"動画ファイルが見つかりません: {input_file}")
