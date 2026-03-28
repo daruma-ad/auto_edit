@@ -1,0 +1,16 @@
+venv
+__pycache__
+.git
+.github
+node_modules
+remotion-project/node_modules
+input
+output
+temp
+*.mp4
+*.png
+*.srt
+*.xml
+*.json
+!remotion-project/public/*.json
+!remotion-project/src/subtitles.json
