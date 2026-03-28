@@ -36,5 +36,23 @@ jobs:
         cache-from: type=gha
         cache-to: type=gha,mode=max
 
-    # 💡 補足: 実際に Cloud Run などへデプロイする場合は、
-    # ここに google-github-actions/deploy-cloudrun などのステップを追加します。
+    # -------------------------------------------------------------------------
+    # 🚀 Google Cloud Run へのデプロイ
+    # -------------------------------------------------------------------------
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    - name: Deploy to Cloud Run
+      uses: google-github-actions/deploy-cloudrun@v2
+      with:
+        service: ai-cut-pro
+        image: ghcr.io/${{ github.repository_owner }}/ai-cut-pro:latest
+        region: asia-northeast1
+        # Whisperや動画処理にはメモリが必要なため、多めに設定（最低2GB、推奨4GB以上）
+        flags: |
+          --memory=4Gi
+          --cpu=2
+          --timeout=3600
+          --allow-unauthenticated
